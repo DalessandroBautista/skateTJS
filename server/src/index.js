@@ -125,7 +125,7 @@ io.on('connection', (socket) => {
 // --- SPA fallback (producción) ---
 if (IS_PROD) {
   const clientDist = path.resolve(__dirname, '../../client/dist');
-  app.get('*', (req, res) => {
+  app.get('/*splat', (req, res) => {
     res.sendFile(path.join(clientDist, 'index.html'));
   });
 }
