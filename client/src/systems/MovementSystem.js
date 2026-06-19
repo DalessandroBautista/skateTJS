@@ -26,7 +26,7 @@ export class MovementSystem {
     // Movimiento horizontal
     this.acceleration = 40;
     this.maxSpeed = 12;
-    this.turnSpeed = 5;
+    this.turnSpeed = 2.5;   // rad/s — 180° tarda ~1.25s, más realista
 
     // Salto
     this.jumpImpulse = 6;
@@ -161,16 +161,14 @@ export class MovementSystem {
       this.transform.rotation.y -= axis.x * this.turnSpeed * dt;
     }
 
-    // --- Movimiento horizontal (W/S) ---
+    // --- Movimiento horizontal ---
     // Air control: 35% de fuerza en el aire para mantener momentum al saltar
     const airborne = !this.trickState.isGrounded && this.trickState.state !== 'grinding';
-    if (axis.z !== 0 && (this.trickState.isGrounded || airborne)) {
-      const skaterAngle = this.transform.rotation.y;
-      const forwardX = -Math.sin(skaterAngle);
-      const forwardZ = -Math.cos(skaterAngle);
 
-      this._moveDir.set(forwardX, 0, forwardZ);
-      this._moveDir.multiplyScalar(-axis.z);
+    if (axis.z < 0 && (this.trickState.isGrounded || airborne)) {
+      // W: empujar hacia adelante en la dirección que el skater mira
+      const skaterAngle = this.transform.rotation.y;
+      this._moveDir.set(-Math.sin(skaterAngle), 0, -Math.cos(skaterAngle));
 
       const airFactor = airborne ? 0.35 : 1.0;
       const forceMagnitude = this.acceleration * body.mass * airFactor;
@@ -183,6 +181,17 @@ export class MovementSystem {
 
       if (this.trickState.isGrounded && (this.trickState.state === 'idle' || this.trickState.state === 'skating')) {
         this.trickState.setState('skating');
+      }
+    } else if (axis.z > 0 && this.trickState.isGrounded) {
+      // S: frenar — el skate no anda de espaldas
+      // Para ir al otro lado: girar con A/D y luego W
+      const brakeFactor = Math.pow(0.12, dt); // a 1s de presionar S → velocidad al 12%
+      body.velocity.x *= brakeFactor;
+      body.velocity.z *= brakeFactor;
+
+      const speed = Math.sqrt(body.velocity.x ** 2 + body.velocity.z ** 2);
+      if (speed < 0.5 && this.trickState.state !== 'idle') {
+        this.trickState.setState('idle');
       }
     } else if (this.trickState.isGrounded && axis.z === 0) {
       const speed = Math.sqrt(body.velocity.x ** 2 + body.velocity.z ** 2);
