@@ -29,7 +29,7 @@ function catmullRomScalar(p0, p1, p2, p3, t) {
 }
 
 export class NetworkSystem {
-  constructor({ scene, playerTransform, playerVelocity, trickState }) {
+  constructor({ scene, playerTransform, playerVelocity, trickState, initialRoomData }) {
     this.scene = scene;
     this.playerTransform = playerTransform;
     this.playerVelocity = playerVelocity;
@@ -44,6 +44,16 @@ export class NetworkSystem {
     this._remotePlayers = new Map();
 
     this._setupHandlers();
+
+    // Cargar jugadores que ya estaban en la sala cuando entramos
+    if (initialRoomData?.players) {
+      for (const p of initialRoomData.players) {
+        if (p.id === networkManager.socket?.id) continue;
+        if (!this._remotePlayers.has(p.id)) {
+          this._addRemotePlayer(p.id, p.username, p.position, p.rotation, p.level, p.skinId);
+        }
+      }
+    }
   }
 
   _setupHandlers() {

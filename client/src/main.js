@@ -208,6 +208,7 @@ function startGame(user, roomData) {
     playerTransform,
     playerVelocity,
     trickState,
+    initialRoomData: roomData,
   });
 
   // --- UI ---

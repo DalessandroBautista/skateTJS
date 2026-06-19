@@ -139,8 +139,14 @@ export class InputManager {
     return this._gamepadAxis.x !== 0 || this._gamepadAxis.z !== 0 || this._gamepadDown.size > 0;
   }
 
+  /** Devuelve true si el foco está en un campo de texto (chat, inputs, etc.) */
+  static isTyping() {
+    const el = document.activeElement;
+    return el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement;
+  }
+
   _onKeyDown(event) {
-    // Ignorar repeticiones — solo nos interesa el primer press
+    if (InputManager.isTyping()) return;
     if (!event.repeat) {
       this._keysPressedBuffer.add(event.code);
     }
@@ -148,6 +154,7 @@ export class InputManager {
   }
 
   _onKeyUp(event) {
+    if (InputManager.isTyping()) return;
     this._keysDown.delete(event.code);
   }
 

@@ -77,6 +77,11 @@ export class RoomUI {
   }
 
   _setupHandlers() {
+    // Cuando llega room_state, si estamos esperando mostrar el código, cachearlo.
+    // Si no, entrar directo (unirse a sala pública o privada ya existente).
+    this._pendingRoomData = null;
+    this._waitingForCode = false;
+
     document.getElementById('btn-join-public')?.addEventListener('click', () => {
       const mapId = document.getElementById('room-map').value;
       networkManager.joinPublic(mapId);
@@ -84,6 +89,7 @@ export class RoomUI {
 
     document.getElementById('btn-create-private')?.addEventListener('click', () => {
       const mapId = document.getElementById('room-map').value;
+      this._waitingForCode = true;
       networkManager.createPrivate(mapId);
     });
 
@@ -94,15 +100,33 @@ export class RoomUI {
     });
 
     networkManager.on('room_state', (data) => {
-      this._enterGame(data);
+      if (this._waitingForCode) {
+        // Guardar roomData y esperar a que el usuario vea el código
+        this._pendingRoomData = data;
+      } else {
+        this._enterGame(data);
+      }
     });
 
     networkManager.on('room_created', ({ code }) => {
       document.getElementById('room-code-value').textContent = code;
       document.getElementById('room-code-display').style.display = '';
+      // Agregar botón para entrar al juego
+      const existing = document.getElementById('btn-enter-game');
+      if (!existing) {
+        const btn = document.createElement('button');
+        btn.id = 'btn-enter-game';
+        btn.textContent = 'ENTRAR AL JUEGO';
+        btn.style.cssText = `margin-top:14px; ${this._btnStyle('#ffcc00', '#000')} width:100%;`;
+        btn.addEventListener('click', () => {
+          if (this._pendingRoomData) this._enterGame(this._pendingRoomData);
+        });
+        document.getElementById('room-code-display').appendChild(btn);
+      }
     });
 
     networkManager.on('join_error', ({ error }) => {
+      this._waitingForCode = false;
       this._setError(error);
     });
   }

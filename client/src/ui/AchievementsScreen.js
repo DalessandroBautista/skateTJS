@@ -11,7 +11,8 @@ export class AchievementsScreen {
     this._visible = false;
     this._el = this._build();
     window.addEventListener('keydown', (e) => {
-      if (e.code === 'KeyL') { e.preventDefault(); this.toggle(); }
+      const typing = document.activeElement instanceof HTMLInputElement || document.activeElement instanceof HTMLTextAreaElement;
+      if (e.code === 'KeyL' && !typing) { e.preventDefault(); this.toggle(); }
     });
   }
 

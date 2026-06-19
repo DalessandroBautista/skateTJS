@@ -122,7 +122,8 @@ export class SkinSelector {
 
   _bindKey() {
     window.addEventListener('keydown', (e) => {
-      if (e.code === 'KeyP' && !e.repeat) this.toggle();
+      const typing = document.activeElement instanceof HTMLInputElement || document.activeElement instanceof HTMLTextAreaElement;
+      if (e.code === 'KeyP' && !e.repeat && !typing) this.toggle();
     });
   }
 
