@@ -66,7 +66,7 @@ new LoginScreen({
   },
 });
 
-function startGame(user, roomData) {
+async function startGame(user, roomData) {
   const loading = new LoadingScreen(roomData?.mapId || 'plaza');
 
   // --- Engine ---
@@ -88,7 +88,7 @@ function startGame(user, roomData) {
 
   // --- Mapa ---
   const mapLoader = new MapLoader(physicsWorld);
-  const mapData = mapLoader.build(roomData?.mapId || 'plaza');
+  const mapData = await mapLoader.buildAsync(roomData?.mapId || 'plaza');
   gameScene.add(mapData.sceneGroup);
 
   const interactiveObjects = new InteractiveObjects();
@@ -109,7 +109,7 @@ function startGame(user, roomData) {
     mass: 5,
     shape: playerShape,
     material: physicsWorld.defaultMaterial,
-    position: new CANNON.Vec3(0, 5, 0),
+    position: new CANNON.Vec3(0, 7, 0),
     angularDamping: 0.99,
     linearDamping: 0.2,
   });
@@ -342,7 +342,7 @@ function startGame(user, roomData) {
   if (user) achievementSystem.syncFromServer();
 
   // --- Debug ---
-  window.__debug = { trickState, playerPhysics, combo, gameLoop };
+  window.__debug = { trickState, playerPhysics, combo, gameLoop, camera, gameScene };
 
   console.log('[SkateGame] Sprint 6 — usuario:', user?.username || 'invitado', '| mapa:', roomData?.mapId || 'plaza');
   console.log('[SkateGame] WASD/Stick mover | SPACE/A saltar | 1-4/Q/E tricks | P skin | G replay | T chat');

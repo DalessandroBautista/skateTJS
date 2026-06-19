@@ -25,12 +25,103 @@ export class MapLoader {
     this.physicsWorld = physicsWorld;
   }
 
+  /** Versión async — carga GLTF para plaza, procedural para park/streets */
+  async buildAsync(mapId = 'plaza') {
+    if (mapId === 'plaza') return await this._buildSkateparkGLTF();
+    return this.build(mapId);
+  }
+
   build(mapId = 'plaza') {
     switch (mapId) {
       case 'park': return this._buildPark();
       case 'streets': return this._buildStreets();
       default: return this._buildPlaza();
     }
+  }
+
+  async _buildSkateparkGLTF() {
+    const { GLTFLoader } = await import('three/addons/loaders/GLTFLoader.js');
+    const loader = new GLTFLoader();
+    const gltf = await loader.loadAsync('/models/skatepark_environment.glb');
+    const root = gltf.scene;
+
+    const SCALE = 1.0;
+    root.scale.setScalar(SCALE);
+
+    // Centrar en XZ (el suelo del modelo está en Y≈0)
+    root.updateMatrixWorld(true);
+    const box3 = new THREE.Box3().setFromObject(root);
+    root.position.x -= (box3.min.x + box3.max.x) / 2;
+    root.position.z -= (box3.min.z + box3.max.z) / 2;
+    root.updateMatrixWorld(true);
+
+    root.traverse(child => {
+      if (child.isMesh) {
+        child.castShadow = true;
+        child.receiveShadow = true;
+      }
+    });
+
+    const r = this._makeResult();
+    r.sceneGroup.add(root);
+
+    // Suelo físico (plano infinito en Y=0)
+    const groundBody = new CANNON.Body({ mass: 0, material: this.physicsWorld.defaultMaterial });
+    groundBody.addShape(new CANNON.Plane());
+    groundBody.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
+    this.physicsWorld.addBody(groundBody);
+    r.colliders.push({ body: groundBody });
+
+    // Colisores aproximados para rampas y rails basados en bounding boxes
+    const RAMP_RE  = /ramp|miniramp|topramp|playground_bup|BoomboxRamp|RampsCar/i;
+    const RAIL_RE  = /pipe/i;
+    const SKIP_RE  = /grass|bike|trashcan|torch|flame|phonebox|graffiti|noshadow|shadow/i;
+
+    root.traverse(child => {
+      if (!child.isMesh) return;
+      const name = child.name || '';
+      if (SKIP_RE.test(name)) return;
+
+      const wb = new THREE.Box3().setFromObject(child);
+      const size = new THREE.Vector3();
+      wb.getSize(size);
+      if (size.length() < 0.3) return; // ignorar objetos muy pequeños
+
+      const center = new THREE.Vector3();
+      wb.getCenter(center);
+      const hx = Math.max(size.x / 2, 0.05);
+      const hy = Math.max(size.y / 2, 0.05);
+      const hz = Math.max(size.z / 2, 0.05);
+
+      if (RAIL_RE.test(name)) {
+        const body = new CANNON.Body({ mass: 0, material: this.physicsWorld.defaultMaterial });
+        body.addShape(new CANNON.Box(new CANNON.Vec3(hx, hy, hz)));
+        body.position.set(center.x, center.y, center.z);
+        this.physicsWorld.addBody(body);
+        r.colliders.push({ body });
+
+        // Registrar como rail grindable (a lo largo del eje más largo)
+        const longZ = hz > hx;
+        r.rails.push({
+          start: new THREE.Vector3(center.x - (longZ ? 0 : hx * 0.9), center.y, center.z - (longZ ? hz * 0.9 : 0)),
+          end:   new THREE.Vector3(center.x + (longZ ? 0 : hx * 0.9), center.y, center.z + (longZ ? hz * 0.9 : 0)),
+        });
+      } else if (RAMP_RE.test(name)) {
+        const body = new CANNON.Body({ mass: 0, material: this.physicsWorld.defaultMaterial });
+        body.addShape(new CANNON.Box(new CANNON.Vec3(hx, hy, hz)));
+        body.position.set(center.x, center.y, center.z);
+        this.physicsWorld.addBody(body);
+        r.colliders.push({ body });
+      }
+    });
+
+    // Spawn por encima del suelo visible del modelo (≈Y=4.3-5)
+    r.spawnPoints.push(
+      new THREE.Vector3(0, 7, 0),
+      new THREE.Vector3(-8, 7, 8),
+      new THREE.Vector3(8, 7, -8),
+    );
+    return r;
   }
 
   _makeResult() {

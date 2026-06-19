@@ -43,7 +43,7 @@ export class MovementSystem {
     this._wasInAir = false;
 
     this._grindTimer = 0;
-    this._spawnPoint = new CANNON.Vec3(0, 5, 0);
+    this._spawnPoint = new CANNON.Vec3(0, 7, 0);
     this._manualTimer = 0;
 
     this.onGrindEnd = null;
@@ -60,7 +60,7 @@ export class MovementSystem {
     const pos = body.position;
 
     // --- Respawn manual (R) o automático (caída) ---
-    if (this.input.isKeyPressed('KeyR') || pos.y < -20) {
+    if (this.input.isKeyPressed('KeyR') || pos.y < -5) {
       body.position.copy(this._spawnPoint);
       body.velocity.set(0, 0, 0);
       body.angularVelocity.set(0, 0, 0);
