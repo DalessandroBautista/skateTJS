@@ -1,0 +1,45 @@
+// Prisma schema - Skate Game
+// Usa SQLite para dev local (cambiar a postgresql en prod)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String        @id @default(cuid())
+  username     String        @unique
+  email        String        @unique
+  password     String
+  level        Int           @default(1)
+  xp           Int           @default(0)
+  highScore    Int           @default(0)
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  scores       Score[]
+  achievements Achievement[]
+}
+
+model Score {
+  id        String   @id @default(cuid())
+  userId    String
+  score     Int
+  mapId     String   @default("plaza")
+  tricks    Int      @default(0)
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Achievement {
+  id          String   @id @default(cuid())
+  userId      String
+  achievementId String
+  unlockedAt  DateTime @default(now())
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, achievementId])
+}
