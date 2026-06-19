@@ -72,12 +72,19 @@ export class MovementSystem {
       return;
     }
 
-    // --- Detección de suelo ---
-    // Usamos velocidad vertical baja como indicador: si el jugador se mueve
-    // poco en Y (abs < 2.5 m/s) y no está demasiado alto, está "en suelo".
-    // Esto funciona tanto en el piso principal como en plataformas elevadas.
-    const verticalSpeed = Math.abs(body.velocity.y);
-    this.trickState.isGrounded = verticalSpeed < 2.5 && pos.y < 30;
+    // --- Detección de suelo via contactos de Cannon-es ---
+    // Más fiable que velocidad vertical: solo true si hay colisión con normal hacia arriba.
+    const world = body.world;
+    let isGrounded = false;
+    if (world) {
+      for (const contact of world.contacts) {
+        if (contact.bi !== body && contact.bj !== body) continue;
+        // ni apunta de bi hacia bj; si bj=player → normal apunta hacia arriba (suelo debajo)
+        const upward = contact.bj === body ? contact.ni.y : -contact.ni.y;
+        if (upward > 0.3) { isGrounded = true; break; }
+      }
+    }
+    this.trickState.isGrounded = isGrounded;
 
     // --- Detección de landing ---
     if (this._wasInAir && this.trickState.isGrounded) {
@@ -94,21 +101,17 @@ export class MovementSystem {
 
     this.trickState.stateTimer += dt;
 
-    this._jumpCooldown = Math.max(0, this._jumpCooldown - dt);
-
     // --- Salto (Space) ---
     if (this.input.isKeyPressed('Space')) {
       if (this.trickState.state === 'grinding') {
         this._currentRail = null;
         body.velocity.y = this.jumpImpulse;
         this.trickState.setState('airborne');
-        this._jumpCooldown = 0.5;
         if (this.onJump) this.onJump();
-      } else if (this.trickState.isGrounded && this._jumpCooldown <= 0) {
+      } else if (this.trickState.isGrounded) {
         body.velocity.y = this.jumpImpulse;
         this.trickState.setState('airborne');
         this._wasInAir = true;
-        this._jumpCooldown = 0.5;
         if (this.onJump) this.onJump();
       }
     }

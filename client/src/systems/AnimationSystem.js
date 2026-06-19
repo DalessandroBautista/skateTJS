@@ -47,10 +47,16 @@ export class AnimationSystem {
    */
   registerMixerPlayer(mixer, clips, trickState) {
     this._mixerPlayer = { mixer, clips, trickState, currentAction: null, lastState: null };
-    const idle = mixer.clipAction(clips.idle);
-    idle.play();
-    this._mixerPlayer.currentAction = idle;
-    this._mixerPlayer.lastState = 'idle';
+    // Arrancar con idle; si no existe, usar skate como fallback
+    const startClip = clips.idle ?? clips.skate;
+    if (!startClip) {
+      console.warn('[AnimationSystem] No hay clips disponibles para Michelle');
+      return;
+    }
+    const action = mixer.clipAction(startClip);
+    action.play();
+    this._mixerPlayer.currentAction = action;
+    this._mixerPlayer.lastState = trickState.state;
   }
 
   /**

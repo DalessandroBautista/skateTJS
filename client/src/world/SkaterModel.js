@@ -252,11 +252,27 @@ export class SkaterModel {
 
     const mixer = new THREE.AnimationMixer(skateFbx);
 
-    const clips = {
-      skate: skateFbx.animations[0],
-      idle:  idleFbx.animations[0],
-      jump:  jumpFbx.animations[0],
+    // FBX "Without Skin" de Mixamo a veces tiene las animaciones dentro del FBX raíz
+    // o directamente en .animations — buscamos en ambos lugares.
+    const extractClip = (fbx) => {
+      if (fbx.animations && fbx.animations.length > 0) return fbx.animations[0];
+      // Algunos loaders meten la animación dentro de los hijos
+      let found = null;
+      fbx.traverse(child => { if (!found && child.animations?.length) found = child.animations[0]; });
+      return found ?? null;
     };
+
+    const clips = {
+      skate: extractClip(skateFbx),
+      idle:  extractClip(idleFbx)  ?? extractClip(skateFbx),
+      jump:  extractClip(jumpFbx)  ?? extractClip(skateFbx),
+    };
+
+    console.log('[Michelle] clips cargados:', {
+      skate: clips.skate?.name ?? 'null',
+      idle:  clips.idle?.name  ?? 'null',
+      jump:  clips.jump?.name  ?? 'null',
+    });
 
     return { model: wrapper, mixer, clips };
   }
