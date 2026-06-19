@@ -27,6 +27,9 @@ export class AnimationSystem {
 
     // Tiempo acumulado para animaciones procedurales
     this._time = 0;
+
+    // Jugador local con FBX + AnimationMixer (Michelle)
+    this._mixerPlayer = null;
   }
 
   /**
@@ -39,11 +42,29 @@ export class AnimationSystem {
   }
 
   /**
+   * Registra el jugador local (Michelle FBX) con AnimationMixer.
+   * Sustituye la animación procedural del player local.
+   */
+  registerMixerPlayer(mixer, clips, trickState) {
+    this._mixerPlayer = { mixer, clips, trickState, currentAction: null, lastState: null };
+    const idle = mixer.clipAction(clips.idle);
+    idle.play();
+    this._mixerPlayer.currentAction = idle;
+    this._mixerPlayer.lastState = 'idle';
+  }
+
+  /**
    * @param {number} dt - Delta time en segundos
    */
   update(dt) {
     this._time += dt;
 
+    // Animación FBX del jugador local
+    if (this._mixerPlayer) {
+      this._updateMixerPlayer(dt);
+    }
+
+    // Animación procedural de jugadores remotos (bloque)
     for (let i = 0; i < this.entities.length; i++) {
       const { mesh, trickState, velocity } = this.entities[i];
       const bones = mesh.model.userData.bones;
@@ -66,6 +87,33 @@ export class AnimationSystem {
           break;
       }
     }
+  }
+
+  _updateMixerPlayer(dt) {
+    const { mixer, clips, trickState } = this._mixerPlayer;
+    const state = trickState.state;
+
+    if (state !== this._mixerPlayer.lastState) {
+      this._mixerPlayer.lastState = state;
+
+      let clip;
+      switch (state) {
+        case 'skating':  clip = clips.skate; break;
+        case 'airborne': clip = clips.jump;  break;
+        default:         clip = clips.idle;  break;
+      }
+
+      if (clip) {
+        const next = mixer.clipAction(clip);
+        if (this._mixerPlayer.currentAction && this._mixerPlayer.currentAction !== next) {
+          this._mixerPlayer.currentAction.crossFadeTo(next, 0.25, true);
+        }
+        next.play();
+        this._mixerPlayer.currentAction = next;
+      }
+    }
+
+    mixer.update(dt);
   }
 
   _animateIdle(bones, dt) {

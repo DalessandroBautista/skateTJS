@@ -9,6 +9,9 @@
  */
 import * as THREE from 'three';
 
+// Carga el personaje Michelle (FBX Mixamo) con sus animaciones
+// Devuelve { model, mixer, clips } para usar con AnimationSystem
+
 export class SkaterModel {
   // Skins predefinidas — id, camisa, tabla, pantalón
   static SKINS = [
@@ -210,6 +213,52 @@ export class SkaterModel {
     };
 
     return group;
+  }
+
+  /**
+   * Carga Michelle desde FBX (Mixamo) con sus 3 animaciones.
+   * Solo para el jugador local — los remotos siguen usando build().
+   */
+  static async buildAsync() {
+    const { FBXLoader } = await import('three/addons/loaders/FBXLoader.js');
+    const loader = new FBXLoader();
+
+    // Cargamos los 3 FBX en paralelo
+    const [skateFbx, idleFbx, jumpFbx] = await Promise.all([
+      loader.loadAsync('/models/michelle_skate.fbx'),
+      loader.loadAsync('/models/michelle_idle.fbx'),
+      loader.loadAsync('/models/michelle_jump.fbx'),
+    ]);
+
+    // Mixamo exporta en centímetros → escalar a metros
+    skateFbx.scale.setScalar(0.01);
+    // Bajar el modelo para que los pies toquen el suelo físico
+    // (el cylinder de physics tiene center en Y=0.5 sobre el piso)
+    skateFbx.position.y = -0.9;
+    // Rotar para que el frente del personaje mire en -Z (igual que el muñeco bloque)
+    skateFbx.rotation.y = Math.PI;
+
+    skateFbx.traverse(child => {
+      if (child.isMesh || child.isSkinnedMesh) {
+        child.castShadow = true;
+        child.receiveShadow = true;
+        child.frustumCulled = false; // Mixamo puede tener bounding boxes incorrectos
+      }
+    });
+
+    // Wrapper para que RenderSystem pueda mover/rotar sin afectar el offset interno
+    const wrapper = new THREE.Group();
+    wrapper.add(skateFbx);
+
+    const mixer = new THREE.AnimationMixer(skateFbx);
+
+    const clips = {
+      skate: skateFbx.animations[0],
+      idle:  idleFbx.animations[0],
+      jump:  jumpFbx.animations[0],
+    };
+
+    return { model: wrapper, mixer, clips };
   }
 
   /** Versión fantasma semitransparente para el replay */

@@ -37,6 +37,7 @@ export class MovementSystem {
     this.grindSpeed = 6;
     this._currentRail = null; // { start, end, point, t }
     this._grindDirection = 1;
+    this._jumpCooldown = 0; // evita doble salto en el pico del arco
 
     this._moveDir = new THREE.Vector3();
     this._force = new CANNON.Vec3();
@@ -93,17 +94,21 @@ export class MovementSystem {
 
     this.trickState.stateTimer += dt;
 
+    this._jumpCooldown = Math.max(0, this._jumpCooldown - dt);
+
     // --- Salto (Space) ---
     if (this.input.isKeyPressed('Space')) {
       if (this.trickState.state === 'grinding') {
         this._currentRail = null;
         body.velocity.y = this.jumpImpulse;
         this.trickState.setState('airborne');
+        this._jumpCooldown = 0.5;
         if (this.onJump) this.onJump();
-      } else if (this.trickState.isGrounded) {
+      } else if (this.trickState.isGrounded && this._jumpCooldown <= 0) {
         body.velocity.y = this.jumpImpulse;
         this.trickState.setState('airborne');
         this._wasInAir = true;
+        this._jumpCooldown = 0.5;
         if (this.onJump) this.onJump();
       }
     }

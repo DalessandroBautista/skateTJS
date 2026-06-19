@@ -98,8 +98,8 @@ async function startGame(user, roomData) {
   const skinSelector = new SkinSelector();
   const savedSkin = skinSelector.currentSkin;
 
-  // --- Modelo del skater local ---
-  const skaterGroup = SkaterModel.build(user?.level || 1, savedSkin);
+  // --- Modelo del skater local (Michelle FBX) ---
+  const { model: skaterGroup, mixer: skaterMixer, clips: skaterClips } = await SkaterModel.buildAsync();
   gameScene.add(skaterGroup);
   const meshComponent = new MeshComponent({ model: skaterGroup });
 
@@ -140,7 +140,7 @@ async function startGame(user, roomData) {
   comboSystem.register(combo, trickState);
 
   const animationSystem = new AnimationSystem();
-  animationSystem.register(meshComponent, trickState, playerVelocity);
+  animationSystem.registerMixerPlayer(skaterMixer, skaterClips, trickState);
 
   const cameraSystem = new CameraSystem({ camera, target: playerTransform, velocity: playerVelocity });
 
@@ -183,17 +183,9 @@ async function startGame(user, roomData) {
     objectivesHUD.refresh(objectives.getMissions(), skateLetters.state);
   });
 
-  // --- Skin selector ---
+  // El selector de skin se mantiene para jugadores remotos (bloque procedural).
+  // Michelle FBX usa sus materiales propios.
   skinSelector.onSelect((skinId) => {
-    // Actualizar el modelo local
-    const skin = SkaterModel.getSkinById(skinId);
-    skaterGroup.traverse((child) => {
-      if (!child.isMesh) return;
-      const n = child.name;
-      if (n === 'torso' || n === 'leftArm' || n === 'rightArm') child.material.color.setHex(skin.shirt);
-      else if (n === 'board') child.material.color.setHex(skin.board);
-      else if (n === 'leftLeg' || n === 'rightLeg') child.material.color.setHex(skin.pants);
-    });
     networkManager.sendSkin(skinId);
   });
   // Enviar skin actual al entrar a sala (después de la conexión)
