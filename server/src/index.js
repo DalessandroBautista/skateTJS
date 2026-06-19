@@ -7,16 +7,23 @@ import express from 'express';
 import http from 'http';
 import { Server as SocketServer } from 'socket.io';
 import cors from 'cors';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { verifyToken } from './middleware/auth.js';
 import authRouter from './routes/auth.js';
 import { RoomManager } from './rooms/RoomManager.js';
 import scoresRouter from './routes/scores.js';
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const IS_PROD = process.env.NODE_ENV === 'production';
+
 const app = express();
 const server = http.createServer(app);
 
-// En dev aceptar cualquier localhost
-const allowedOrigins = /^http:\/\/localhost:\d+$/;
+// En dev: cualquier localhost. En prod: mismo origen (el server sirve el cliente).
+const allowedOrigins = IS_PROD
+  ? (process.env.ALLOWED_ORIGIN ? [process.env.ALLOWED_ORIGIN] : true)
+  : /^http:\/\/localhost:\d+$/;
 
 const io = new SocketServer(server, {
   cors: { origin: allowedOrigins, methods: ['GET', 'POST'] },
@@ -25,6 +32,12 @@ const io = new SocketServer(server, {
 // --- Middleware ---
 app.use(cors({ origin: allowedOrigins }));
 app.use(express.json());
+
+// --- Servir cliente estático en producción ---
+if (IS_PROD) {
+  const clientDist = path.resolve(__dirname, '../../client/dist');
+  app.use(express.static(clientDist));
+}
 
 // --- REST Routes ---
 app.get('/api/health', (req, res) => {
@@ -108,6 +121,14 @@ io.on('connection', (socket) => {
     console.log(`[Socket] ${username} desconectado`);
   });
 });
+
+// --- SPA fallback (producción) ---
+if (IS_PROD) {
+  const clientDist = path.resolve(__dirname, '../../client/dist');
+  app.get('*', (req, res) => {
+    res.sendFile(path.join(clientDist, 'index.html'));
+  });
+}
 
 // --- Start ---
 const PORT = process.env.PORT || 4000;
