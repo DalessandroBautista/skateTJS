@@ -251,10 +251,12 @@ export class SkaterModel {
     wrapper.add(skateFbx);
 
     // Patineta visual bajo los pies del personaje.
-    // Pies en wrapper-local Y = -0.4. Deck (h=0.025) → centro en -0.4125 para que la cara
-    // superior quede en -0.4 = nivel exacto de los pies.
+    // Los pies están en wrapper-local Y = -0.4 (= FLOOR_Y en world).
+    // Subimos el deck 0.06m sobre el piso para que sea visible y no quede enterrado
+    // en el mesh del suelo. Los pies quedan ligeramente dentro del deck — es aceptable
+    // en tercera persona desde atrás.
     const skateGroup = SkaterModel._buildSkateboard();
-    skateGroup.position.y = -0.4125;
+    skateGroup.position.y = -0.34;
     wrapper.userData.skateGroup = skateGroup; // referencia para AnimationSystem (trick anims)
     wrapper.add(skateGroup);
 
@@ -276,17 +278,21 @@ export class SkaterModel {
       jump:  extractClip(jumpFbx)  ?? extractClip(skateFbx),
     };
 
-    // Eliminar root motion: Mixamo sin "In Place" incluye tracks de posición
-    // en el hueso Hips que desplazan el esqueleto en X/Z sin que lo controle
-    // la física → el personaje "camina" visualmente sin moverse el body.
+    // Eliminar root motion: Mixamo incluye tracks de posición Y ROTACIÓN en el
+    // objeto raíz y el hueso Hips. La posición hace que el personaje "camine"
+    // solo; la rotación hace que el clip de jump gire 180° el personaje.
+    // Filtramos ambos en el objeto raíz y en Hips.
     const removeRootMotion = (clip) => {
       if (!clip) return;
       clip.tracks = clip.tracks.filter(track => {
         const parts = track.name.split('.');
         const bone = parts[0].toLowerCase();
         const prop = parts[parts.length - 1];
-        const isRootBone = bone.includes('hip') || bone === 'root' || bone === 'mixamorigroot';
-        return !(prop === 'position' && isRootBone);
+        const isRootObj = bone.includes('hip') || bone === 'root' ||
+                          bone === 'mixamorigroot' || bone === 'armature' ||
+                          bone === 'scene' || bone === 'mixamorig';
+        // Eliminar tracks de posición Y rotación del objeto raíz / Hips
+        return !(isRootObj && (prop === 'position' || prop === 'quaternion'));
       });
     };
     Object.values(clips).forEach(removeRootMotion);

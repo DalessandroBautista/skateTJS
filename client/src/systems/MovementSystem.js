@@ -66,6 +66,17 @@ export class MovementSystem {
       body.velocity.y = this.jumpImpulse * 2.5;
     }
 
+    // Cap horizontal: el step de física (PhysicsSystem) puede producir impulsos enormes
+    // cuando la esfera toca la arista entre rampa y suelo. Este clamp corre al inicio
+    // del frame siguiente al step de física, cortando la velocidad antes de que el
+    // jugador vuele una distancia visible.
+    const _hRaw = Math.sqrt(body.velocity.x ** 2 + body.velocity.z ** 2);
+    if (_hRaw > this.maxSpeed * 1.5) {
+      const _hs = (this.maxSpeed * 1.5) / _hRaw;
+      body.velocity.x *= _hs;
+      body.velocity.z *= _hs;
+    }
+
     // --- Respawn manual (R) o automático (caída) ---
     if (this.input.isKeyPressed('KeyR') || pos.y < -5) {
       // Cerrar grind con puntos antes de respawnear
@@ -148,7 +159,10 @@ export class MovementSystem {
         new THREE.Vector3(pos.x, pos.y, pos.z),
         this.grailDetectRadius
       );
-      if (nearRail && pos.y - 0.5 <= nearRail.start.y + 0.3) {
+      // Los pies del jugador (pos.y - 0.5) deben estar dentro de ±0.4m del rail.
+      // El check original (pos.y - 0.5 <= railY + 0.3) era verdadero incluso en el
+      // suelo, causando grinds falsos en rails invisibles cercanos.
+      if (nearRail && Math.abs((pos.y - 0.5) - nearRail.start.y) <= 0.4) {
         // Proyectar posición del jugador sobre el rail para calcular t de entrada
         const railVec = new THREE.Vector3().subVectors(nearRail.end, nearRail.start);
         const railLen = railVec.length();

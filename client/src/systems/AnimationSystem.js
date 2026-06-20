@@ -140,12 +140,18 @@ export class AnimationSystem {
     // Cap de dt para evitar salto de pose en el primer frame o tras tab-switch
     mixer.update(Math.min(dt, 1 / 30));
 
-    // Doble reset de root motion:
-    // 1) FBX root (puede ser Armature/Scene con tracks de posición propios)
+    // Reset completo del root motion después de cada mixer.update():
+    // Los clips de Mixamo a veces incluyen tracks de posición Y ROTACIÓN en el
+    // objeto raíz (Armature/Scene) además del hueso Hips. Si no reseteamos la
+    // rotación también, el clip de jump puede anular el rotation.y = Math.PI
+    // que fija la orientación del personaje → giro de 180° visible al saltar.
     const fbxRoot = mixer.getRoot();
     fbxRoot.position.x = 0;
     fbxRoot.position.z = 0;
-    // 2) Hueso Hips (root motion clásico de Mixamo)
+    fbxRoot.rotation.x = 0;
+    fbxRoot.rotation.y = Math.PI; // orientación fija: FBX mira en -Z local
+    fbxRoot.rotation.z = 0;
+    // Hueso Hips (root motion clásico de Mixamo)
     if (this._mixerPlayer.hipBone) {
       this._mixerPlayer.hipBone.position.x = 0;
       this._mixerPlayer.hipBone.position.z = 0;

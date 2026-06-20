@@ -96,30 +96,10 @@ export class MapLoader {
     addWallBox( bx, wy,   0, 0.5, WALL_H / 2, bz); // pared +X
     addWallBox(-bx, wy,   0, 0.5, WALL_H / 2, bz); // pared -X
 
-    // Rails grindables invisibles
-    const addRail = (x, z, length, angle) => {
-      const railY = FLOOR_Y + 0.9;
-      const b = new CANNON.Body({ mass: 0, material: this.physicsWorld.defaultMaterial });
-      // Box siempre fino en X (0.1) y largo en Z local (length/2), luego rotado → rail siempre alineado
-      b.addShape(new CANNON.Box(new CANNON.Vec3(0.1, 0.1, length / 2)));
-      b.position.set(x, railY, z);
-      b.quaternion.setFromAxisAngle(new CANNON.Vec3(0, 1, 0), angle);
-      this.physicsWorld.addBody(b);
-      r.colliders.push({ body: b });
-
-      const sinA = Math.sin(angle), cosA = Math.cos(angle);
-      r.rails.push({
-        start: new THREE.Vector3(x - sinA * length / 2, railY, z - cosA * length / 2),
-        end:   new THREE.Vector3(x + sinA * length / 2, railY, z + cosA * length / 2),
-        t: 0,
-      });
-    };
-
-    addRail(-14, -8,  8, 0);
-    addRail( 14,  8,  8, 0);
-    addRail(  0, -10, 10, Math.PI / 6);
-    addRail(  6,  12, 7,  Math.PI / 2);
-    addRail( -6,  14, 7,  Math.PI / 2);
+    // Rails: no se agregan en el mapa GLTF porque las posiciones son arbitrarias
+    // y no coinciden con los rails visuales del modelo. Sin rails → sin grind
+    // falso al saltar en esa zona. Agregar rails reales cuando se conozcan las
+    // coordenadas exactas de los caños del GLB.
 
     // Spawn points — 2m sobre el suelo físico real
     r.spawnPoints.push(
