@@ -45,10 +45,21 @@ export class AnimationSystem {
    * Registra el jugador local (Michelle FBX) con AnimationMixer.
    * Sustituye la animación procedural del player local.
    */
-  registerMixerPlayer(mixer, clips, trickState) {
-    this._mixerPlayer = { mixer, clips, trickState, currentAction: null, lastState: null };
-    // Arrancar con idle; si no existe, usar skate como fallback
-    const startClip = clips.idle ?? clips.skate;
+  registerMixerPlayer(mixer, clips, trickState, skateGroup = null) {
+    // Buscar hueso raíz (Hips) para resetear root motion residual frame a frame
+    let hipBone = null;
+    mixer.getRoot().traverse(child => {
+      if (!hipBone && child.isBone && child.name.toLowerCase().includes('hip')) {
+        hipBone = child;
+      }
+    });
+    this._mixerPlayer = {
+      mixer, clips, trickState, skateGroup,
+      currentAction: null, lastState: null, hipBone,
+      trickAnim: null,   // { elapsed, duration, rx, ry, rz }
+    };
+    // Arrancar siempre con skate (clips.idle no retargea bien al esqueleto con skin)
+    const startClip = clips.skate ?? clips.idle;
     if (!startClip) {
       console.warn('[AnimationSystem] No hay clips disponibles para Michelle');
       return;
@@ -104,22 +115,99 @@ export class AnimationSystem {
 
       let clip;
       switch (state) {
-        case 'skating':  clip = clips.skate; break;
-        case 'airborne': clip = clips.jump;  break;
-        default:         clip = clips.idle;  break;
+        case 'idle':     clip = clips.idle  ?? clips.skate; break;
+        case 'airborne': clip = clips.jump  ?? clips.skate; break;
+        default:         clip = clips.skate;                break;
       }
 
       if (clip) {
         const next = mixer.clipAction(clip);
-        if (this._mixerPlayer.currentAction && this._mixerPlayer.currentAction !== next) {
-          this._mixerPlayer.currentAction.crossFadeTo(next, 0.25, true);
+        if (next !== this._mixerPlayer.currentAction) {
+          if (this._mixerPlayer.currentAction) {
+            // Si el estado cambió muy rápido (<0.2s), cortar sin fade para no apilar acciones
+            if (trickState.stateTimer < 0.2) {
+              this._mixerPlayer.currentAction.stop();
+            } else {
+              this._mixerPlayer.currentAction.fadeOut(0.2);
+            }
+          }
+          next.reset().fadeIn(0.2).play();
+          this._mixerPlayer.currentAction = next;
         }
-        next.play();
-        this._mixerPlayer.currentAction = next;
       }
     }
 
-    mixer.update(dt);
+    // Cap de dt para evitar salto de pose en el primer frame o tras tab-switch
+    mixer.update(Math.min(dt, 1 / 30));
+
+    // Doble reset de root motion:
+    // 1) FBX root (puede ser Armature/Scene con tracks de posición propios)
+    const fbxRoot = mixer.getRoot();
+    fbxRoot.position.x = 0;
+    fbxRoot.position.z = 0;
+    // 2) Hueso Hips (root motion clásico de Mixamo)
+    if (this._mixerPlayer.hipBone) {
+      this._mixerPlayer.hipBone.position.x = 0;
+      this._mixerPlayer.hipBone.position.z = 0;
+    }
+
+    // Animación visual del truco en la patineta
+    this._updateTrickAnim(dt);
+  }
+
+  _updateTrickAnim(dt) {
+    const { trickState, skateGroup } = this._mixerPlayer;
+    if (!skateGroup) return;
+
+    // Iniciar animación cuando hay un truco nuevo
+    if (trickState.lastTrick && !this._mixerPlayer.trickAnim) {
+      this._mixerPlayer.trickAnim = this._getTrickAnim(trickState.lastTrick.id);
+    }
+
+    const ta = this._mixerPlayer.trickAnim;
+    if (!ta) {
+      skateGroup.rotation.set(0, 0, 0);
+      return;
+    }
+
+    ta.elapsed += dt;
+    // Ease in-out cuadrático
+    const raw = Math.min(ta.elapsed / ta.duration, 1);
+    const t = raw < 0.5 ? 2 * raw * raw : -1 + (4 - 2 * raw) * raw;
+
+    skateGroup.rotation.x = ta.rx * t;
+    skateGroup.rotation.y = ta.ry * t;
+    skateGroup.rotation.z = ta.rz * t;
+
+    if (raw >= 1) {
+      this._mixerPlayer.trickAnim = null;
+      skateGroup.rotation.set(0, 0, 0);
+    }
+  }
+
+  _getTrickAnim(id) {
+    const PI2 = Math.PI * 2;
+    const base = { elapsed: 0, duration: 0.45, rx: 0, ry: 0, rz: 0 };
+    switch (id) {
+      case 'kickflip':        return { ...base, rz:  PI2 };
+      case 'heelflip':        return { ...base, rz: -PI2 };
+      case '360_flip':        return { ...base, rz: PI2, ry: PI2 };
+      case 'varial_kickflip': return { ...base, rz: PI2, ry: PI2 };
+      case 'varial_heelflip': return { ...base, rz: -PI2, ry: PI2 };
+      case 'hardflip':        return { ...base, rz: PI2, ry: -PI2 };
+      case 'pop_shoveit':     return { ...base, ry: PI2,         duration: 0.35 };
+      case 'impossible':      return { ...base, rx: PI2 };
+      case 'bigspin':         return { ...base, ry: PI2 * 2, rz: PI2, duration: 0.55 };
+      case 'nine_hundred':    return { ...base, ry: PI2 * 3,          duration: 0.65 };
+      case 'mctwist':         return { ...base, ry: PI2 * 2, rx: PI2, duration: 0.65 };
+      // Grabs: la tabla no gira, se inclina levemente
+      case 'indy':
+      case 'nose_grab':
+      case 'stalefish':
+      case 'mute':            return { ...base, rx: Math.PI / 6, duration: 0.5 };
+      case 'kickflip_indy':   return { ...base, rz: PI2, rx: Math.PI / 6 };
+      default:                return { ...base, rz: PI2 };
+    }
   }
 
   _animateIdle(bones, dt) {

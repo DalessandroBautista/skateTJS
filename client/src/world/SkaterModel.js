@@ -232,9 +232,9 @@ export class SkaterModel {
 
     // Mixamo exporta en centímetros → escalar a metros
     skateFbx.scale.setScalar(0.01);
-    // Bajar el modelo para que los pies toquen el suelo físico
-    // (el cylinder de physics tiene center en Y=0.5 sobre el piso)
-    skateFbx.position.y = -0.9;
+    // Offset para alinear pies al piso físico.
+    // Sphere(r=0.4): wrapper en FLOOR_Y+0.4, pies del FBX en local Y≈+0.4 → offset = -0.8
+    skateFbx.position.y = -0.8;
     // Rotar para que el frente del personaje mire en -Z (igual que el muñeco bloque)
     skateFbx.rotation.y = Math.PI;
 
@@ -249,6 +249,14 @@ export class SkaterModel {
     // Wrapper para que RenderSystem pueda mover/rotar sin afectar el offset interno
     const wrapper = new THREE.Group();
     wrapper.add(skateFbx);
+
+    // Patineta visual bajo los pies del personaje.
+    // Pies en wrapper-local Y = -0.4. Deck (h=0.025) → centro en -0.4125 para que la cara
+    // superior quede en -0.4 = nivel exacto de los pies.
+    const skateGroup = SkaterModel._buildSkateboard();
+    skateGroup.position.y = -0.4125;
+    wrapper.userData.skateGroup = skateGroup; // referencia para AnimationSystem (trick anims)
+    wrapper.add(skateGroup);
 
     const mixer = new THREE.AnimationMixer(skateFbx);
 
@@ -268,13 +276,70 @@ export class SkaterModel {
       jump:  extractClip(jumpFbx)  ?? extractClip(skateFbx),
     };
 
-    console.log('[Michelle] clips cargados:', {
+    // Eliminar root motion: Mixamo sin "In Place" incluye tracks de posición
+    // en el hueso Hips que desplazan el esqueleto en X/Z sin que lo controle
+    // la física → el personaje "camina" visualmente sin moverse el body.
+    const removeRootMotion = (clip) => {
+      if (!clip) return;
+      clip.tracks = clip.tracks.filter(track => {
+        const parts = track.name.split('.');
+        const bone = parts[0].toLowerCase();
+        const prop = parts[parts.length - 1];
+        const isRootBone = bone.includes('hip') || bone === 'root' || bone === 'mixamorigroot';
+        return !(prop === 'position' && isRootBone);
+      });
+    };
+    Object.values(clips).forEach(removeRootMotion);
+
+    console.log('[Michelle] clips cargados (root motion eliminado):', {
       skate: clips.skate?.name ?? 'null',
       idle:  clips.idle?.name  ?? 'null',
       jump:  clips.jump?.name  ?? 'null',
     });
 
     return { model: wrapper, mixer, clips };
+  }
+
+  /** Construye la patineta visual (tabla + trucks + ruedas) */
+  static _buildSkateboard() {
+    const group = new THREE.Group();
+
+    // Tabla
+    const deckMat = new THREE.MeshStandardMaterial({ color: 0xcc8833, roughness: 0.75 });
+    const deck = new THREE.Mesh(new THREE.BoxGeometry(0.20, 0.025, 0.75), deckMat);
+    group.add(deck);
+
+    // Franja de nariz (identifica el frente — −Z cuando el wrapper mira −Z)
+    const noseMat = new THREE.MeshStandardMaterial({ color: 0xff3311, roughness: 0.5 });
+    const nose = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.027, 0.07), noseMat);
+    nose.position.z = -0.33;
+    group.add(nose);
+
+    const truckMat = new THREE.MeshStandardMaterial({ color: 0xaaaaaa, metalness: 0.8, roughness: 0.25 });
+    const wheelMat = new THREE.MeshStandardMaterial({ color: 0xffeebb, roughness: 0.5 });
+
+    for (const tz of [0.27, -0.27]) {
+      // Truck (eje)
+      const truck = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.022, 0.05), truckMat);
+      truck.position.set(0, -0.023, tz);
+      group.add(truck);
+
+      // Ruedas izq. y der.
+      for (const wx of [-0.11, 0.11]) {
+        const wheel = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.04, 0.04, 0.036, 10),
+          wheelMat
+        );
+        wheel.rotation.z = Math.PI / 2;
+        wheel.position.set(wx, -0.042, tz);
+        group.add(wheel);
+      }
+    }
+
+    group.traverse(c => {
+      if (c.isMesh) { c.castShadow = true; c.receiveShadow = true; }
+    });
+    return group;
   }
 
   /** Versión fantasma semitransparente para el replay */

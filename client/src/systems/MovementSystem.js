@@ -42,9 +42,10 @@ export class MovementSystem {
     this._moveDir = new THREE.Vector3();
     this._force = new CANNON.Vec3();
     this._wasInAir = false;
+    this._airborneFrames = 0; // debounce para evitar animación de salto falsa
 
     this._grindTimer = 0;
-    this._spawnPoint = new CANNON.Vec3(0, 7, 0);
+    this._spawnPoint = new CANNON.Vec3(0, 8, 0); // FY=4.5 + altura spawn
     this._manualTimer = 0;
 
     this.onGrindEnd = null;
@@ -60,8 +61,17 @@ export class MovementSystem {
     const body = this.physics.body;
     const pos = body.position;
 
+    // Cap velocidad vertical: evita lanzamientos extremos por colisión con aristas
+    if (body.velocity.y > this.jumpImpulse * 2.5) {
+      body.velocity.y = this.jumpImpulse * 2.5;
+    }
+
     // --- Respawn manual (R) o automático (caída) ---
     if (this.input.isKeyPressed('KeyR') || pos.y < -5) {
+      // Cerrar grind con puntos antes de respawnear
+      if (this._grindTimer > 0 && this.onGrindEnd) {
+        this.onGrindEnd(Math.min(1000, Math.round(this._grindTimer * 150)));
+      }
       body.position.copy(this._spawnPoint);
       body.velocity.set(0, 0, 0);
       body.angularVelocity.set(0, 0, 0);
@@ -69,6 +79,9 @@ export class MovementSystem {
       this.trickState.setState('idle');
       this._currentRail = null;
       this._grindTimer = 0;
+      this._manualTimer = 0;
+      this._wasInAir = false;
+      this._airborneFrames = 0;
       return;
     }
 
@@ -86,16 +99,27 @@ export class MovementSystem {
     }
     this.trickState.isGrounded = isGrounded;
 
-    // --- Detección de landing ---
-    if (this._wasInAir && this.trickState.isGrounded) {
+    // Debounce: contar frames consecutivos sin contacto de suelo
+    if (!isGrounded) {
+      this._airborneFrames++;
+    } else {
+      this._airborneFrames = 0;
+    }
+
+    // --- Detección de landing (instantánea al recuperar contacto) ---
+    if (this._wasInAir && isGrounded) {
       const speed = Math.sqrt(body.velocity.x ** 2 + body.velocity.z ** 2);
       this.trickState.setState(speed > 0.5 ? 'skating' : 'idle');
       if (this.onLand) this.onLand();
+      this._wasInAir = false;
     }
-    this._wasInAir = !this.trickState.isGrounded;
 
-    // --- Estado airborne si no está en suelo ni grinding ---
-    if (!this.trickState.isGrounded && this.trickState.state !== 'grinding') {
+    // _wasInAir se activa solo tras 4+ frames sin suelo (o al saltar explícitamente)
+    if (this._airborneFrames > 4) this._wasInAir = true;
+
+    // --- Estado airborne: esperar 4 frames sin contacto para evitar animación falsa ---
+    // Esto evita que micro-bumps o pérdidas de contacto de 1-2 frames activen el jump
+    if (this._airborneFrames > 4 && this.trickState.state !== 'grinding') {
       this.trickState.setState('airborne');
     }
 
@@ -107,6 +131,7 @@ export class MovementSystem {
         this._currentRail = null;
         body.velocity.y = this.jumpImpulse;
         this.trickState.setState('airborne');
+        this._wasInAir = true;
         if (this.onJump) this.onJump();
       } else if (this.trickState.isGrounded) {
         body.velocity.y = this.jumpImpulse;
@@ -124,10 +149,19 @@ export class MovementSystem {
         this.grailDetectRadius
       );
       if (nearRail && pos.y - 0.5 <= nearRail.start.y + 0.3) {
+        // Proyectar posición del jugador sobre el rail para calcular t de entrada
+        const railVec = new THREE.Vector3().subVectors(nearRail.end, nearRail.start);
+        const railLen = railVec.length();
+        const railDir = railVec.clone().normalize();
+        if (railLen > 0.01) {
+          const toPlayer = new THREE.Vector3(pos.x, pos.y, pos.z).sub(nearRail.start);
+          nearRail.t = Math.max(0, Math.min(1, toPlayer.dot(railDir) / railLen));
+        } else {
+          nearRail.t = 0;
+        }
         this._currentRail = nearRail;
         this.trickState.setState('grinding');
         // Dirección inicial: misma que la velocidad del jugador proyectada sobre el rail
-        const railDir = new THREE.Vector3().subVectors(nearRail.end, nearRail.start).normalize();
         const playerVel = new THREE.Vector3(body.velocity.x, 0, body.velocity.z);
         this._grindDirection = playerVel.dot(railDir) >= 0 ? 1 : -1;
       }
@@ -135,6 +169,8 @@ export class MovementSystem {
 
     // --- Lógica de grinding ---
     if (this.trickState.state === 'grinding' && this._currentRail) {
+      // Si veníamos del aire, el aterrizaje es el rail
+      if (this._wasInAir) this._wasInAir = false;
       this._grindTimer += dt;
       if (this.onGrindTick) this.onGrindTick();
       this._updateGrind(dt, pos, body);
@@ -191,20 +227,32 @@ export class MovementSystem {
         this.trickState.setState('skating');
       }
     } else if (axis.z > 0 && this.trickState.isGrounded) {
-      // S: frenar — el skate no anda de espaldas
-      // Para ir al otro lado: girar con A/D y luego W
-      const brakeFactor = Math.pow(0.12, dt); // a 1s de presionar S → velocidad al 12%
+      // S: frenar
+      const brakeFactor = Math.pow(0.12, dt);
       body.velocity.x *= brakeFactor;
       body.velocity.z *= brakeFactor;
-
       const speed = Math.sqrt(body.velocity.x ** 2 + body.velocity.z ** 2);
       if (speed < 0.5 && this.trickState.state !== 'idle') {
         this.trickState.setState('idle');
       }
-    } else if (this.trickState.isGrounded && axis.z === 0) {
-      const speed = Math.sqrt(body.velocity.x ** 2 + body.velocity.z ** 2);
-      if (speed < 0.5 && this.trickState.state !== 'idle') {
-        this.trickState.setState('idle');
+    } else if (axis.z === 0) {
+      // Sin input: fricción fuerte en tierra, suave en aire
+      // Aplica siempre para evitar deslizamiento indefinido por linearDamping bajo
+      if (this.trickState.isGrounded) {
+        const brakeFactor = Math.pow(0.001, dt); // ~0.3s para parar
+        body.velocity.x *= brakeFactor;
+        body.velocity.z *= brakeFactor;
+        if (Math.abs(body.velocity.x) < 0.05) body.velocity.x = 0;
+        if (Math.abs(body.velocity.z) < 0.05) body.velocity.z = 0;
+        const speed = Math.sqrt(body.velocity.x ** 2 + body.velocity.z ** 2);
+        if (speed < 0.5 && this.trickState.state !== 'idle') {
+          this.trickState.setState('idle');
+        }
+      } else {
+        // Drag aéreo: más suave pero evita que siga acelerando en el aire
+        const airBrake = Math.pow(0.08, dt); // ~1.5s para parar en aire
+        body.velocity.x *= airBrake;
+        body.velocity.z *= airBrake;
       }
     }
 
@@ -223,6 +271,14 @@ export class MovementSystem {
     // Avanzar a lo largo del rail
     const railDir = new THREE.Vector3().subVectors(rail.end, rail.start);
     const railLen = railDir.length();
+    // Guard: rail degenerado (start === end) — salir sin crashear
+    if (railLen < 0.01) {
+      this._currentRail = null;
+      this._airborneFrames = 5;
+      this._wasInAir = true;
+      this.trickState.setState('airborne');
+      return;
+    }
     railDir.normalize();
 
     // Avanzar en la dirección del grind
@@ -231,6 +287,8 @@ export class MovementSystem {
     // Salir del rail al llegar al extremo (no rebotar)
     if (newT >= 1 || newT <= 0) {
       this._currentRail = null;
+      this._airborneFrames = 5; // forzar detección de airborne inmediatamente
+      this._wasInAir = true;
       this.trickState.setState('airborne');
       return;
     }

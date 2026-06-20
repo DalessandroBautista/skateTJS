@@ -1,3 +1,4 @@
+import * as THREE from 'three';
 import * as CANNON from 'cannon-es'; // usado para Body.DYNAMIC / Body.KINEMATIC
 
 /**
@@ -77,15 +78,12 @@ export class PhysicsSystem {
           );
         }
       }
-      // Cuerpos kinemáticos: Transform → Cannon (para Sprint 1.4+)
+      // Cuerpos kinemáticos: Transform → Cannon
+      // transform.rotation es THREE.Euler — convertir a quaternion antes de copiar
       else if (body.type === CANNON.Body.KINEMATIC) {
         body.position.set(transform.position.x, transform.position.y, transform.position.z);
-        body.quaternion.set(
-          transform.rotation.x,
-          transform.rotation.y,
-          transform.rotation.z,
-          transform.rotation.w || 1
-        );
+        const q = new THREE.Quaternion().setFromEuler(transform.rotation);
+        body.quaternion.set(q.x, q.y, q.z, q.w);
       }
     }
   }

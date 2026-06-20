@@ -19,8 +19,8 @@ export class PhysicsWorld {
     this.world.solver.iterations = 10;
     this.world.solver.tolerance = 0.001;
 
-    // Broadphase (detección rápida de posibles colisiones)
-    this.world.broadphase = new CANNON.NaiveBroadphase();
+    // Broadphase — SAP escala linealmente con cuerpos estáticos (mejor que O(n²) de NaiveBroadphase)
+    this.world.broadphase = new CANNON.SAPBroadphase(this.world);
 
     // Material por defecto y contacto
     this.defaultMaterial = new CANNON.Material('default');
@@ -63,6 +63,9 @@ export class PhysicsWorld {
    */
   step(dt) {
     this._accumulator += dt;
+    // Clampear acumulador: evita física inestable al volver de tab background o stutters
+    const maxAccum = this._maxSubSteps * this._fixedStep;
+    if (this._accumulator > maxAccum) this._accumulator = maxAccum;
     let steps = 0;
     while (this._accumulator >= this._fixedStep && steps < this._maxSubSteps) {
       this.world.step(this._fixedStep);

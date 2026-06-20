@@ -104,12 +104,16 @@ async function startGame(user, roomData) {
   const meshComponent = new MeshComponent({ model: skaterGroup });
 
   // --- Cuerpo físico del jugador ---
-  const playerShape = new CANNON.Cylinder(0.5, 0.5, 1.0, 8);
+  // Esfera en lugar de cilindro: genera 1 solo contact point con el piso,
+  // sin rebotes ni inestabilidades al aplicar fuerzas horizontales.
+  const playerShape = new CANNON.Sphere(0.4);
+  // Spawn inicial sobre el spawn point del mapa (calculado con FLOOR_Y real)
+  const initSpawn = mapData.spawnPoints?.[0] ?? { x: 0, y: 8, z: 0 };
   const playerBody = new CANNON.Body({
     mass: 5,
     shape: playerShape,
     material: physicsWorld.defaultMaterial,
-    position: new CANNON.Vec3(0, 7, 0),
+    position: new CANNON.Vec3(initSpawn.x, initSpawn.y, initSpawn.z),
     angularDamping: 0.99,
     linearDamping: 0.2,
   });
@@ -130,6 +134,11 @@ async function startGame(user, roomData) {
   const movementSystem = new MovementSystem({
     inputManager, playerTransform, playerPhysics, trickState, interactiveObjects,
   });
+  // Usar el spawn point real del mapa (no el hardcodeado en MovementSystem)
+  if (mapData.spawnPoints?.length > 0) {
+    const sp = mapData.spawnPoints[0];
+    movementSystem._spawnPoint.set(sp.x, sp.y, sp.z);
+  }
 
   const physicsSystem = new PhysicsSystem({ physicsWorld });
   physicsSystem.register(playerTransform, playerPhysics, playerVelocity);
@@ -140,9 +149,9 @@ async function startGame(user, roomData) {
   comboSystem.register(combo, trickState);
 
   const animationSystem = new AnimationSystem();
-  animationSystem.registerMixerPlayer(skaterMixer, skaterClips, trickState);
+  animationSystem.registerMixerPlayer(skaterMixer, skaterClips, trickState, skaterGroup.userData.skateGroup ?? null);
 
-  const cameraSystem = new CameraSystem({ camera, target: playerTransform, velocity: playerVelocity });
+  const cameraSystem = new CameraSystem({ camera, target: playerTransform, velocity: playerVelocity, trickState });
 
   const renderSystem = new RenderSystem();
   renderSystem.register(playerTransform, skaterGroup);

@@ -45,10 +45,7 @@ export class MapLoader {
     const gltf = await loader.loadAsync('/models/skatepark_environment.glb');
     const root = gltf.scene;
 
-    const SCALE = 1.0;
-    root.scale.setScalar(SCALE);
-
-    // Centrar en XZ (el suelo del modelo está en Y≈0)
+    root.scale.setScalar(1.0);
     root.updateMatrixWorld(true);
     const box3 = new THREE.Box3().setFromObject(root);
     root.position.x -= (box3.min.x + box3.max.x) / 2;
@@ -56,72 +53,113 @@ export class MapLoader {
     root.updateMatrixWorld(true);
 
     root.traverse(child => {
-      if (child.isMesh) {
-        child.castShadow = true;
-        child.receiveShadow = true;
-      }
+      if (child.isMesh) { child.castShadow = true; child.receiveShadow = true; }
     });
 
     const r = this._makeResult();
     r.sceneGroup.add(root);
 
-    // Suelo físico (plano infinito en Y=0)
-    const groundBody = new CANNON.Body({ mass: 0, material: this.physicsWorld.defaultMaterial });
-    groundBody.addShape(new CANNON.Plane());
-    groundBody.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
-    this.physicsWorld.addBody(groundBody);
-    r.colliders.push({ body: groundBody });
+    // ── FLOOR_Y via raycast ────────────────────────────────────────────────
+    // gltfBox.min.y = fondo del modelo (parte inferior de los meshes), no la
+    // superficie caminable. Raycaster desde arriba encuentra la cara superior
+    // del suelo real.
+    const gltfBox = new THREE.Box3().setFromObject(root);
+    const FLOOR_Y = this._raycastFloorY(root, gltfBox.min.y);
+    console.log('[MapLoader] FLOOR_Y detectado (raycast):', FLOOR_Y.toFixed(3));
 
-    // Colisores aproximados para rampas y rails basados en bounding boxes
-    const RAMP_RE  = /ramp|miniramp|topramp|playground_bup|BoomboxRamp|RampsCar/i;
-    const RAIL_RE  = /pipe/i;
-    const SKIP_RE  = /grass|bike|trashcan|torch|flame|phonebox|graffiti|noshadow|shadow/i;
+    const addPhysicsPlane = (y, rotEuler) => {
+      const b = new CANNON.Body({ mass: 0, material: this.physicsWorld.defaultMaterial });
+      b.addShape(new CANNON.Plane());
+      b.quaternion.setFromEuler(...rotEuler);
+      b.position.set(0, y, 0);
+      this.physicsWorld.addBody(b);
+      r.colliders.push({ body: b });
+    };
+    addPhysicsPlane(FLOOR_Y, [-Math.PI / 2, 0, 0]);       // suelo principal
+    addPhysicsPlane(FLOOR_Y - 10, [-Math.PI / 2, 0, 0]);  // red de seguridad
 
-    root.traverse(child => {
-      if (!child.isMesh) return;
-      const name = child.name || '';
-      if (SKIP_RE.test(name)) return;
+    // ── Paredes invisibles ajustadas al tamaño real del GLB ───────────────
+    // gltfBox ya está centrado en XZ → max.x/max.z son los semiejes del mapa.
+    const WALL_H = 30;
+    const bx = Math.max(Math.abs(gltfBox.min.x), gltfBox.max.x) + 1; // semi-ancho X + 1m margen
+    const bz = Math.max(Math.abs(gltfBox.min.z), gltfBox.max.z) + 1; // semi-ancho Z + 1m margen
+    const wy = FLOOR_Y + WALL_H / 2;
+    const addWallBox = (x, y, z, hx, hy, hz) => {
+      const b = new CANNON.Body({ mass: 0, material: this.physicsWorld.defaultMaterial });
+      b.addShape(new CANNON.Box(new CANNON.Vec3(hx, hy, hz)));
+      b.position.set(x, y, z);
+      this.physicsWorld.addBody(b);
+      r.colliders.push({ body: b });
+    };
+    addWallBox(0,   wy,  bz, bx, WALL_H / 2, 0.5); // pared +Z
+    addWallBox(0,   wy, -bz, bx, WALL_H / 2, 0.5); // pared -Z
+    addWallBox( bx, wy,   0, 0.5, WALL_H / 2, bz); // pared +X
+    addWallBox(-bx, wy,   0, 0.5, WALL_H / 2, bz); // pared -X
 
-      const wb = new THREE.Box3().setFromObject(child);
-      const size = new THREE.Vector3();
-      wb.getSize(size);
-      if (size.length() < 0.3) return; // ignorar objetos muy pequeños
+    // Rails grindables invisibles
+    const addRail = (x, z, length, angle) => {
+      const railY = FLOOR_Y + 0.9;
+      const b = new CANNON.Body({ mass: 0, material: this.physicsWorld.defaultMaterial });
+      // Box siempre fino en X (0.1) y largo en Z local (length/2), luego rotado → rail siempre alineado
+      b.addShape(new CANNON.Box(new CANNON.Vec3(0.1, 0.1, length / 2)));
+      b.position.set(x, railY, z);
+      b.quaternion.setFromAxisAngle(new CANNON.Vec3(0, 1, 0), angle);
+      this.physicsWorld.addBody(b);
+      r.colliders.push({ body: b });
 
-      const center = new THREE.Vector3();
-      wb.getCenter(center);
-      const hx = Math.max(size.x / 2, 0.05);
-      const hy = Math.max(size.y / 2, 0.05);
-      const hz = Math.max(size.z / 2, 0.05);
+      const sinA = Math.sin(angle), cosA = Math.cos(angle);
+      r.rails.push({
+        start: new THREE.Vector3(x - sinA * length / 2, railY, z - cosA * length / 2),
+        end:   new THREE.Vector3(x + sinA * length / 2, railY, z + cosA * length / 2),
+        t: 0,
+      });
+    };
 
-      if (RAIL_RE.test(name)) {
-        const body = new CANNON.Body({ mass: 0, material: this.physicsWorld.defaultMaterial });
-        body.addShape(new CANNON.Box(new CANNON.Vec3(hx, hy, hz)));
-        body.position.set(center.x, center.y, center.z);
-        this.physicsWorld.addBody(body);
-        r.colliders.push({ body });
+    addRail(-14, -8,  8, 0);
+    addRail( 14,  8,  8, 0);
+    addRail(  0, -10, 10, Math.PI / 6);
+    addRail(  6,  12, 7,  Math.PI / 2);
+    addRail( -6,  14, 7,  Math.PI / 2);
 
-        // Registrar como rail grindable (a lo largo del eje más largo)
-        const longZ = hz > hx;
-        r.rails.push({
-          start: new THREE.Vector3(center.x - (longZ ? 0 : hx * 0.9), center.y, center.z - (longZ ? hz * 0.9 : 0)),
-          end:   new THREE.Vector3(center.x + (longZ ? 0 : hx * 0.9), center.y, center.z + (longZ ? hz * 0.9 : 0)),
-        });
-      } else if (RAMP_RE.test(name)) {
-        const body = new CANNON.Body({ mass: 0, material: this.physicsWorld.defaultMaterial });
-        body.addShape(new CANNON.Box(new CANNON.Vec3(hx, hy, hz)));
-        body.position.set(center.x, center.y, center.z);
-        this.physicsWorld.addBody(body);
-        r.colliders.push({ body });
-      }
-    });
-
-    // Spawn por encima del suelo visible del modelo (≈Y=4.3-5)
+    // Spawn points — 2m sobre el suelo físico real
     r.spawnPoints.push(
-      new THREE.Vector3(0, 7, 0),
-      new THREE.Vector3(-8, 7, 8),
-      new THREE.Vector3(8, 7, -8),
+      new THREE.Vector3(0,  FLOOR_Y + 2, 0),
+      new THREE.Vector3(-8, FLOOR_Y + 2, 8),
+      new THREE.Vector3( 8, FLOOR_Y + 2,-8),
     );
+    r.floorY = FLOOR_Y; // exponer para que main.js ajuste spawn y offset visual
     return r;
+  }
+
+  /**
+   * Encuentra el Y de la superficie caminable del GLTF usando raycast.
+   * Samplea una grilla 3x3 alrededor del centro y devuelve la mediana de los
+   * hits horizontales para ignorar rampas y decoraciones elevadas.
+   * @param {THREE.Object3D} root
+   * @param {number} fallback - valor si no hay hits
+   */
+  _raycastFloorY(root, fallback) {
+    const caster = new THREE.Raycaster();
+    const down = new THREE.Vector3(0, -1, 0);
+    const samples = [
+      [0,0],[3,0],[-3,0],[0,3],[0,-3],
+      [3,3],[-3,3],[3,-3],[-3,-3]
+    ];
+    const ys = [];
+    for (const [x, z] of samples) {
+      caster.set(new THREE.Vector3(x, 200, z), down);
+      const hits = caster.intersectObject(root, true);
+      for (const h of hits) {
+        // Normal en world space — usar Math.abs porque muchos GLTF tienen
+        // normales del suelo apuntando hacia abajo (caras invertidas en Blender)
+        const wn = h.face.normal.clone().transformDirection(h.object.matrixWorld);
+        if (Math.abs(wn.y) > 0.7) { ys.push(h.point.y); break; }
+      }
+    }
+    console.log('[MapLoader] raycast floor hits Y:', ys.length ? ys.map(v => v.toFixed(3)).join(', ') : '(sin hits → fallback ' + fallback.toFixed(3) + ')');
+    if (ys.length === 0) return fallback;
+    ys.sort((a, b) => a - b);
+    return ys[Math.floor(ys.length / 2)]; // mediana → ignora outliers
   }
 
   _makeResult() {
@@ -186,7 +224,7 @@ export class MapLoader {
       mesh.name = `rail_${i}`;
       r.sceneGroup.add(mesh); r.meshes.push(mesh);
       r.colliders.push({ mesh, body });
-      r.rails.push({ mesh, start, end });
+      r.rails.push({ mesh, start, end, t: 0 });
     }
 
     const platforms = [
@@ -257,7 +295,7 @@ export class MapLoader {
       mesh.name = `rail_${i}`;
       r.sceneGroup.add(mesh); r.meshes.push(mesh);
       r.colliders.push({ mesh, body });
-      r.rails.push({ mesh, start, end });
+      r.rails.push({ mesh, start, end, t: 0 });
     }
 
     // Plataformas más altas
@@ -353,7 +391,7 @@ export class MapLoader {
       mesh.name = `rail_${i}`;
       r.sceneGroup.add(mesh); r.meshes.push(mesh);
       r.colliders.push({ mesh, body });
-      r.rails.push({ mesh, start, end });
+      r.rails.push({ mesh, start, end, t: 0 });
     }
 
     r.spawnPoints.push(new THREE.Vector3(0, 1, 0), new THREE.Vector3(-8, 1, -8), new THREE.Vector3(8, 1, 8));
@@ -481,21 +519,21 @@ export class MapLoader {
     mesh.castShadow = true;
     mesh.receiveShadow = true;
 
-    // Física
-    const shape = new CANNON.Box(new CANNON.Vec3(railWidth / 2, railHeight / 2, length / 2));
-    const body = new CANNON.Body({ mass: 0, shape, material: this.physicsWorld.defaultMaterial });
+    // Física — box fino en X, largo en Z local, rotado para alinear con el rail
+    const body = new CANNON.Body({ mass: 0, material: this.physicsWorld.defaultMaterial });
+    body.addShape(new CANNON.Box(new CANNON.Vec3(railWidth / 2, railHeight / 2, length / 2)));
     const q = new CANNON.Quaternion();
     q.setFromAxisAngle(new CANNON.Vec3(0, 1, 0), angle);
     body.quaternion = q;
     body.position.set(x, 0.5, z);
     this.physicsWorld.addBody(body);
 
-    // Puntos de inicio y fin del rail (para grind)
+    // Puntos de inicio y fin del rail (para grind) — incluye t:0 inicial
     const halfLen = length / 2;
     const start = new THREE.Vector3(x - Math.sin(angle) * halfLen, 0.5, z - Math.cos(angle) * halfLen);
     const end = new THREE.Vector3(x + Math.sin(angle) * halfLen, 0.5, z + Math.cos(angle) * halfLen);
 
-    return { mesh, body, start, end };
+    return { mesh, body, start, end, t: 0 };
   }
 
   _createWall(x, z, sx, sz) {
