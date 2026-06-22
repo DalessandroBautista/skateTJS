@@ -13,12 +13,15 @@ const COLLECT_RADIUS = 2.2;
 
 // Posiciones por mapa — ajustadas a la geometría de cada uno
 const POSITIONS = {
+  // Plaza es el mapa GLTF: piso real X∈[-10.9,10.1] Z∈[-17.5,15.8], FLOOR_Y≈3.3.
+  // Las letras se ubican sobre los obstáculos del skatepark (dentro del área
+  // jugable), incentivando usar rails y rampas para alcanzarlas.
   plaza: [
-    new THREE.Vector3(-12, 4, -12),
-    new THREE.Vector3( 12, 4, -12),
-    new THREE.Vector3(  0, 6,   0),
-    new THREE.Vector3(-12, 4,  12),
-    new THREE.Vector3( 12, 4,  12),
+    new THREE.Vector3(-6, 5.0, -3),   // S — sobre el rail izquierdo
+    new THREE.Vector3( 6, 5.0, -3),   // K — sobre el rail derecho
+    new THREE.Vector3( 0, 5.8, -11),  // A — sobre el funbox
+    new THREE.Vector3( 0, 5.3,  6),   // T — sobre el rail central
+    new THREE.Vector3( 0, 6.2, 13),   // E — en la cima de la rampa frontal
   ],
   park: [
     new THREE.Vector3(-18, 5,   0),

@@ -43,6 +43,7 @@ import { AchievementsScreen } from './ui/AchievementsScreen.js';
 import { ObjectivesSystem } from './systems/ObjectivesSystem.js';
 import { ObjectivesHUD } from './ui/ObjectivesHUD.js';
 import { SkateLetters } from './world/SkateLetters.js';
+import { Coins } from './world/Coins.js';
 import { ReplaySystem } from './systems/ReplaySystem.js';
 import { SkinSelector } from './ui/SkinSelector.js';
 import { soundManager } from './audio/SoundManager.js';
@@ -172,6 +173,13 @@ async function startGame(user, roomData) {
   const objectives = new ObjectivesSystem();
   const objectivesHUD = new ObjectivesHUD();
   const skateLetters = new SkateLetters(gameScene.scene, mapId);
+  const coins = new Coins(gameScene.scene, mapId);
+
+  coins.onCollect((value) => {
+    combo.addBonus(value, `Moneda +${value}`);
+    hud.showTrickPopup(`💰 +${value}`);
+    soundManager.playTrick();
+  });
 
   skateLetters.onCollect((index, letter) => {
     const count = skateLetters.count;
@@ -312,6 +320,7 @@ async function startGame(user, roomData) {
       achievementSystem.onSpeedUpdate(speed);
       objectives.onSpeedUpdate(speed);
       skateLetters.update(dt, playerTransform.position);
+      coins.update(dt, playerTransform.position);
       replaySystem.record(dt, playerTransform.position, playerTransform.rotation.y);
       replaySystem.update(dt);
     }
@@ -343,7 +352,8 @@ async function startGame(user, roomData) {
   if (user) achievementSystem.syncFromServer();
 
   // --- Debug ---
-  window.__debug = { trickState, playerPhysics, combo, gameLoop, camera, gameScene };
+  window.__debug = { trickState, playerPhysics, combo, gameLoop, camera, gameScene, THREE, mapData, mapLoader, movementSystem };
+  window.THREE = THREE;
 
   console.log('[SkateGame] Sprint 6 — usuario:', user?.username || 'invitado', '| mapa:', roomData?.mapId || 'plaza');
   console.log('[SkateGame] WASD/Stick mover | SPACE/A saltar | 1-4/Q/E tricks | P skin | G replay | T chat');

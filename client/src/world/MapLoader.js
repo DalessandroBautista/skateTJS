@@ -78,28 +78,35 @@ export class MapLoader {
     addPhysicsPlane(FLOOR_Y, [-Math.PI / 2, 0, 0]);       // suelo principal
     addPhysicsPlane(FLOOR_Y - 10, [-Math.PI / 2, 0, 0]);  // red de seguridad
 
-    // ── Paredes invisibles ajustadas al tamaño real del GLB ───────────────
-    // gltfBox ya está centrado en XZ → max.x/max.z son los semiejes del mapa.
-    const WALL_H = 30;
-    const bx = Math.max(Math.abs(gltfBox.min.x), gltfBox.max.x) + 1; // semi-ancho X + 1m margen
-    const bz = Math.max(Math.abs(gltfBox.min.z), gltfBox.max.z) + 1; // semi-ancho Z + 1m margen
+    // ── Paredes invisibles ceñidas al PISO JUGABLE real ──────────────────
+    // gltfBox cubre TODO el modelo (muebles gigantes incluidos) → ±32, muy
+    // lejos del piso caminable. Usamos el bounding box del mesh del suelo real
+    // para que el jugador no pueda salir de la zona jugable hacia la decoración.
+    const fb = this._floorMeshBounds(root, FLOOR_Y);
+    const bounds = fb || { minX: -10.5, maxX: 10.5, minZ: -17, maxZ: 15.5 };
+    console.log('[MapLoader] límites del piso jugable:', JSON.stringify(bounds));
+
+    const WALL_H = 12;
+    const M = 0.4; // margen hacia afuera para no tapar el borde visual
+    const x0 = bounds.minX - M, x1 = bounds.maxX + M;
+    const z0 = bounds.minZ - M, z1 = bounds.maxZ + M;
+    const cx = (x0 + x1) / 2, cz = (z0 + z1) / 2;
+    const hx = (x1 - x0) / 2, hz = (z1 - z0) / 2;
     const wy = FLOOR_Y + WALL_H / 2;
-    const addWallBox = (x, y, z, hx, hy, hz) => {
+    const addWallBox = (x, y, z, sx, sy, sz) => {
       const b = new CANNON.Body({ mass: 0, material: this.physicsWorld.defaultMaterial });
-      b.addShape(new CANNON.Box(new CANNON.Vec3(hx, hy, hz)));
+      b.addShape(new CANNON.Box(new CANNON.Vec3(sx, sy, sz)));
       b.position.set(x, y, z);
       this.physicsWorld.addBody(b);
       r.colliders.push({ body: b });
     };
-    addWallBox(0,   wy,  bz, bx, WALL_H / 2, 0.5); // pared +Z
-    addWallBox(0,   wy, -bz, bx, WALL_H / 2, 0.5); // pared -Z
-    addWallBox( bx, wy,   0, 0.5, WALL_H / 2, bz); // pared +X
-    addWallBox(-bx, wy,   0, 0.5, WALL_H / 2, bz); // pared -X
+    addWallBox(cx, wy, z1, hx, WALL_H / 2, 0.5); // pared +Z
+    addWallBox(cx, wy, z0, hx, WALL_H / 2, 0.5); // pared -Z
+    addWallBox(x1, wy, cz, 0.5, WALL_H / 2, hz); // pared +X
+    addWallBox(x0, wy, cz, 0.5, WALL_H / 2, hz); // pared -X
 
-    // Rails: no se agregan en el mapa GLTF porque las posiciones son arbitrarias
-    // y no coinciden con los rails visuales del modelo. Sin rails → sin grind
-    // falso al saltar en esa zona. Agregar rails reales cuando se conozcan las
-    // coordenadas exactas de los caños del GLB.
+    // ── Obstáculos de skatepark (rails, rampas, funbox) ───────────────────
+    this._addSkateparkObstacles(r, FLOOR_Y);
 
     // Spawn points — 2m sobre el suelo físico real
     r.spawnPoints.push(
@@ -140,6 +147,182 @@ export class MapLoader {
     if (ys.length === 0) return fallback;
     ys.sort((a, b) => a - b);
     return ys[Math.floor(ys.length / 2)]; // mediana → ignora outliers
+  }
+
+  /**
+   * Identifica el mesh del suelo (raycast al centro) y devuelve su bounding box
+   * en XZ. Sirve para ceñir las paredes al área jugable real.
+   * @returns {{minX:number,maxX:number,minZ:number,maxZ:number}|null}
+   */
+  _floorMeshBounds(root, floorY) {
+    const caster = new THREE.Raycaster();
+    const down = new THREE.Vector3(0, -1, 0);
+    // Probar varios puntos del centro hasta dar con el mesh del piso
+    for (const [x, z] of [[0, 0], [0, -4], [4, 0], [-4, 4]]) {
+      caster.set(new THREE.Vector3(x, floorY + 200, z), down);
+      const hits = caster.intersectObject(root, true);
+      for (const h of hits) {
+        if (!h.object.isMesh || !h.face) continue;
+        const wn = h.face.normal.clone().transformDirection(h.object.matrixWorld);
+        if (Math.abs(wn.y) > 0.6 && Math.abs(h.point.y - floorY) < 0.8) {
+          const box = new THREE.Box3().setFromObject(h.object);
+          return {
+            minX: box.min.x, maxX: box.max.x,
+            minZ: box.min.z, maxZ: box.max.z,
+          };
+        }
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Construye un layout de skatepark (rails, rampas, funbox) con geometría
+   * visible Y colisión, posicionado sobre el suelo del mapa GLTF en floorY.
+   * Los rails se registran para grind geométrico (sin cuerpo de física, que
+   * causaría lanzamientos al chocar con la esfera del jugador al saltar).
+   */
+  _addSkateparkObstacles(r, floorY) {
+    // ── Grind rails (caños metálicos) ──────────────────────────────────
+    this._addGrindRail(r, -6, -3, 9, 0, floorY);          // izquierda, eje Z
+    this._addGrindRail(r,  6, -3, 9, 0, floorY);          // derecha, eje Z
+    this._addGrindRail(r,  0,  6, 7, Math.PI / 2, floorY); // central, eje X
+
+    // ── Funbox (plataforma con ledge grindable arriba) + rampa de acceso ──
+    this._addFunbox(r, 0, -11, 6, 1, 4, floorY);
+    // Rampa de acceso pegada al borde +Z del funbox (sube desde el centro)
+    this._addRampObstacle(r, 0, -7.5, 0, floorY, 1, 4, 3);
+
+    // ── Rampas (wedge) ─────────────────────────────────────────────────
+    // angle orienta la cara baja (subible) hacia el centro del mapa, de modo
+    // que el jugador las sube viniendo desde el spawn y salta hacia la pared.
+    this._addRampObstacle(r, 0, 13, Math.PI, floorY);   // frente: sube hacia +Z
+    this._addRampObstacle(r, -7, -14, 0, floorY);        // esquina: sube hacia -Z
+    this._addRampObstacle(r, 7, -14, 0, floorY);         // esquina: sube hacia -Z
+  }
+
+  /** Caño grindable visible. No agrega cuerpo de física (grind es geométrico). */
+  _addGrindRail(r, x, z, length, angle, floorY) {
+    const railY = floorY + 0.55;
+    const group = new THREE.Group();
+
+    // Amarillo emisivo → indica visualmente que el caño es grindable
+    const tubeMat = new THREE.MeshStandardMaterial({ color: 0xffe14d, emissive: 0xffaa00, emissiveIntensity: 0.45, metalness: 0.5, roughness: 0.3 });
+    const tube = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, length, 14), tubeMat);
+    tube.rotation.x = Math.PI / 2; // alinear con Z local
+    tube.castShadow = true; tube.receiveShadow = true;
+    group.add(tube);
+
+    const postMat = new THREE.MeshStandardMaterial({ color: 0x555560, metalness: 0.7, roughness: 0.45 });
+    for (const s of [-1, 1]) {
+      const post = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.55, 8), postMat);
+      post.position.set(0, -0.30, s * (length / 2 - 0.4));
+      post.castShadow = true;
+      group.add(post);
+    }
+
+    group.position.set(x, railY, z);
+    group.rotation.y = angle;
+    r.sceneGroup.add(group);
+
+    const sinA = Math.sin(angle), cosA = Math.cos(angle);
+    r.rails.push({
+      start: new THREE.Vector3(x - sinA * length / 2, railY, z - cosA * length / 2),
+      end:   new THREE.Vector3(x + sinA * length / 2, railY, z + cosA * length / 2),
+      t: 0,
+    });
+  }
+
+  /** Funbox: caja sólida (colisión Box) con un rail grindable en el borde superior. */
+  _addFunbox(r, x, z, sx, h, sz, floorY) {
+    const topY = floorY + h;
+    const mat = new THREE.MeshStandardMaterial({ color: 0x3a3f55, roughness: 0.85, metalness: 0.1 });
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(sx, h, sz), mat);
+    mesh.position.set(x, floorY + h / 2, z);
+    mesh.castShadow = true; mesh.receiveShadow = true;
+    r.sceneGroup.add(mesh);
+
+    // Borde superior con franja de color (estética skatepark)
+    const edgeMat = new THREE.MeshStandardMaterial({ color: 0xffcc00, roughness: 0.5, metalness: 0.3 });
+    const edge = new THREE.Mesh(new THREE.BoxGeometry(sx + 0.05, 0.12, sz + 0.05), edgeMat);
+    edge.position.set(x, topY - 0.02, z);
+    edge.castShadow = true;
+    r.sceneGroup.add(edge);
+
+    const body = new CANNON.Body({ mass: 0, material: this.physicsWorld.defaultMaterial });
+    body.addShape(new CANNON.Box(new CANNON.Vec3(sx / 2, h / 2, sz / 2)));
+    body.position.set(x, floorY + h / 2, z);
+    this.physicsWorld.addBody(body);
+    r.colliders.push({ body });
+
+    // Rails grindables a lo largo de los dos bordes superiores (eje X)
+    for (const s of [-1, 1]) {
+      r.rails.push({
+        start: new THREE.Vector3(x - sx / 2, topY + 0.05, z + s * sz / 2),
+        end:   new THREE.Vector3(x + sx / 2, topY + 0.05, z + s * sz / 2),
+        t: 0,
+      });
+    }
+  }
+
+  /** Rampa wedge con colisión ConvexPolyhedron, base apoyada en floorY. */
+  _addRampObstacle(r, x, z, angle, floorY, height = 1.8, width = 4, length = 5) {
+    const hw = width / 2, hl = length / 2;
+
+    const geometry = new THREE.BufferGeometry();
+    const vertices = new Float32Array([
+      -hw, 0,  hl,  hw, 0,  hl,
+      -hw, height, -hl,  hw, height, -hl,
+      -hw, 0, -hl,  hw, 0, -hl,
+    ]);
+    geometry.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
+    geometry.setIndex([
+      0, 1, 3,  0, 3, 2,   // slope
+      0, 4, 5,  0, 5, 1,   // bottom
+      0, 2, 4,             // left
+      1, 5, 3,             // right
+      2, 5, 4,  2, 3, 5,   // back
+    ]);
+    geometry.computeVertexNormals();
+
+    const mat = new THREE.MeshStandardMaterial({ color: 0x7a4fff, roughness: 0.55, metalness: 0.25 });
+    const mesh = new THREE.Mesh(geometry, mat);
+    mesh.position.set(x, floorY, z);
+    mesh.rotation.y = angle;
+    mesh.castShadow = true; mesh.receiveShadow = true;
+    r.sceneGroup.add(mesh);
+
+    // ── Colisión: Box DELGADO inclinado, no ConvexPolyhedron ──────────────
+    // El wedge convexo tenía caras laterales verticales (altura `height`) que
+    // actuaban como paredes: bloqueaban salir por los costados, cruzar en
+    // diagonal, y la colisión esfera-poliedro de Cannon es tosca en aristas.
+    // Un box delgado alineado con la cara inclinada da colisión esfera-box
+    // suave y, al ser fino, deja entrar/salir libremente por cualquier lado.
+    const theta = Math.atan2(height, length); // pendiente de la rampa
+    const slopeLen = Math.hypot(length, height);
+    // Grosor GRANDE: el box llena el volumen del wedge y su fondo queda hundido
+    // bajo el piso, así no queda hueco debajo de la pendiente (el jugador no se
+    // mete por abajo). La cara superior sigue coincidiendo con la pendiente
+    // (ver localY), y como se patina por encima, se puede salir por los costados.
+    const T = height + 0.8;
+
+    const body = new CANNON.Body({ mass: 0, material: this.physicsWorld.defaultMaterial });
+    body.addShape(new CANNON.Box(new CANNON.Vec3(hw, T / 2, slopeLen / 2)));
+    // Inclinar θ sobre X, luego orientar `angle` sobre Y
+    const qTilt = new CANNON.Quaternion().setFromAxisAngle(new CANNON.Vec3(1, 0, 0), theta);
+    const qYaw = new CANNON.Quaternion().setFromAxisAngle(new CANNON.Vec3(0, 1, 0), angle);
+    body.quaternion = qYaw.mult(qTilt);
+    // Centro del box: punto medio de la cara inclinada, hundido T/2 bajo ella
+    const localY = height / 2 - Math.cos(theta) * T / 2;
+    const localZ = -Math.sin(theta) * T / 2;
+    body.position.set(
+      x + localZ * Math.sin(angle),
+      floorY + localY,
+      z + localZ * Math.cos(angle),
+    );
+    this.physicsWorld.addBody(body);
+    r.colliders.push({ body });
+    r.ramps.push({ mesh, body, direction: new THREE.Vector3(0, 0, -1) });
   }
 
   _makeResult() {

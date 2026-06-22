@@ -47,6 +47,8 @@ export class MovementSystem {
     this._grindTimer = 0;
     this._spawnPoint = new CANNON.Vec3(0, 8, 0); // FY=4.5 + altura spawn
     this._manualTimer = 0;
+    this._jumpTimer = 0; // tiempo desde el último salto (anti wall-climb)
+    this._grindCooldown = 0; // bloquea re-enganche inmediato al salir de un grind
 
     this.onGrindEnd = null;
     this.onGrindTick = null;
@@ -96,19 +98,43 @@ export class MovementSystem {
       return;
     }
 
-    // --- Detección de suelo via contactos de Cannon-es ---
+    // --- Detección de suelo y paredes via contactos de Cannon-es ---
     // Más fiable que velocidad vertical: solo true si hay colisión con normal hacia arriba.
+    // Acumulamos también la normal de contactos laterales (paredes/obstáculos
+    // verticales) para impedir que el jugador trepe empujando con W.
     const world = body.world;
     let isGrounded = false;
+    let wallX = 0, wallZ = 0, wallCount = 0;
     if (world) {
       for (const contact of world.contacts) {
         if (contact.bi !== body && contact.bj !== body) continue;
-        // ni apunta de bi hacia bj; si bj=player → normal apunta hacia arriba (suelo debajo)
-        const upward = contact.bj === body ? contact.ni.y : -contact.ni.y;
-        if (upward > 0.3) { isGrounded = true; break; }
+        // Normal apuntando HACIA el jugador
+        const sign = contact.bj === body ? 1 : -1;
+        const ny = contact.ni.y * sign;
+        if (ny > 0.3) {
+          isGrounded = true;
+        } else if (Math.abs(ny) < 0.5) {
+          wallX += contact.ni.x * sign;
+          wallZ += contact.ni.z * sign;
+          wallCount++;
+        }
       }
     }
     this.trickState.isGrounded = isGrounded;
+
+    // Normal de pared promedio (del muro hacia el jugador), normalizada en XZ
+    let wnx = 0, wnz = 0;
+    if (wallCount > 0) {
+      const wl = Math.hypot(wallX, wallZ);
+      if (wl > 1e-4) { wnx = wallX / wl; wnz = wallZ / wl; }
+    }
+
+    // Anti wall-climb: si el jugador sube tocando una pared sin haber saltado
+    // hace poco, cancelar la velocidad vertical ascendente parásita.
+    if (this._jumpTimer > 0) this._jumpTimer -= dt;
+    if (wallCount > 0 && !isGrounded && this._jumpTimer <= 0 && body.velocity.y > 0) {
+      body.velocity.y = 0;
+    }
 
     // Debounce: contar frames consecutivos sin contacto de suelo
     if (!isGrounded) {
@@ -136,6 +162,9 @@ export class MovementSystem {
 
     this.trickState.stateTimer += dt;
 
+    // Timers de cooldown
+    if (this._grindCooldown > 0) this._grindCooldown -= dt;
+
     // --- Salto (Space) ---
     if (this.input.isKeyPressed('Space')) {
       if (this.trickState.state === 'grinding') {
@@ -143,17 +172,20 @@ export class MovementSystem {
         body.velocity.y = this.jumpImpulse;
         this.trickState.setState('airborne');
         this._wasInAir = true;
+        this._jumpTimer = 0.4;
+        this._grindCooldown = 0.6; // evita re-enganchar al mismo rail al instante
         if (this.onJump) this.onJump();
       } else if (this.trickState.isGrounded) {
         body.velocity.y = this.jumpImpulse;
         this.trickState.setState('airborne');
         this._wasInAir = true;
+        this._jumpTimer = 0.4;
         if (this.onJump) this.onJump();
       }
     }
 
     // --- Grind: detectar rail ---
-    if (this.trickState.state !== 'grinding' && !this.trickState.isGrounded) {
+    if (this.trickState.state !== 'grinding' && !this.trickState.isGrounded && this._grindCooldown <= 0) {
       // Posibilidad de aterrizar en un rail
       const nearRail = this.interactiveObjects.findNearestRail(
         new THREE.Vector3(pos.x, pos.y, pos.z),
@@ -185,6 +217,18 @@ export class MovementSystem {
     if (this.trickState.state === 'grinding' && this._currentRail) {
       // Si veníamos del aire, el aterrizaje es el rail
       if (this._wasInAir) this._wasInAir = false;
+      // Bajarse del rail con S (freno) sin tener que saltar
+      if (axis.z > 0) {
+        const pts = Math.min(1000, Math.round(this._grindTimer * 150));
+        if (this.onGrindEnd) this.onGrindEnd(pts);
+        this._grindTimer = 0;
+        this._currentRail = null;
+        this._grindCooldown = 0.5;
+        this._airborneFrames = 5;
+        this._wasInAir = true;
+        this.trickState.setState('airborne');
+        return;
+      }
       this._grindTimer += dt;
       if (this.onGrindTick) this.onGrindTick();
       this._updateGrind(dt, pos, body);
@@ -227,6 +271,17 @@ export class MovementSystem {
       // W: empujar hacia adelante en la dirección que el skater mira
       const skaterAngle = this.transform.rotation.y;
       this._moveDir.set(-Math.sin(skaterAngle), 0, -Math.cos(skaterAngle));
+
+      // Si hay una pared, proyectar la dirección sobre el plano tangente al muro:
+      // el jugador puede deslizar a lo largo de la pared pero no empujar contra
+      // ella (evita el trepado vertical al mantener W contra el borde del mapa).
+      if (wallCount > 0) {
+        const proj = this._moveDir.x * wnx + this._moveDir.z * wnz;
+        if (proj < 0) {
+          this._moveDir.x -= wnx * proj;
+          this._moveDir.z -= wnz * proj;
+        }
+      }
 
       const airFactor = airborne ? 0.35 : 1.0;
       const forceMagnitude = this.acceleration * body.mass * airFactor;
